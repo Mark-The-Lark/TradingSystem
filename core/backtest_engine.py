@@ -1,4 +1,4 @@
-# core/backtest_engine.py (замена)
+# core/backtest_engine.py
 
 import asyncio
 import logging
@@ -13,15 +13,22 @@ from core.mocks import MockEventBus, MockOrderManager
 
 logger = logging.getLogger(__name__)
 
+
 class BacktestEngine:
+    """
+    Одиночный бэктестер: один символ, одна стратегия.
+    Стратегия создаётся без symbol/timeframes (новый API).
+    Данные подаются по subscriptions стратегии; если их нет — по symbol из strategy_params.
+    """
+
     def __init__(
         self,
-        data: Dict[str, pd.DataFrame],
+        data: Dict[str, pd.DataFrame],       # ticker -> DataFrame (OHLCV)
         strategy_class: Type[Strategy],
-        strategy_params: dict,
+        strategy_params: dict,                # name, mode, [state]
         initial_capital: float = 100_000.0,
         commission: Optional[CommissionModel] = None,
-        execution_model: str = 'next_bar_worst'  # 'current_close' или 'next_bar_worst'
+        execution_model: str = 'next_bar_open',  # 'next_bar_open' | 'next_bar_worst'
     ):
         self.data = data
         self.strategy_class = strategy_class
@@ -32,145 +39,177 @@ class BacktestEngine:
 
     def run(
         self,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> dict:
-        symbol = self.strategy_params.get('symbol')
-        if symbol not in self.data:
-            raise ValueError(f"Нет данных для символа {symbol}")
-
-        df = self.data[symbol].copy()
-        if df.empty:
-            return self._empty_result()
-
-        logger.info(f"Запуск бэктеста: {symbol}, свечей: {len(df)}, модель: {self.execution_model}")
-        if progress_callback:
-            progress_callback(0, len(df))
-
-        # Моки
+        # Создаём стратегию через новый API (без symbol/timeframes)
         event_bus = MockEventBus()
         order_manager = MockOrderManager()
 
-        # Стратегия
         strategy = self.strategy_class(
             name=self.strategy_params.get('name', 'backtest'),
-            symbol=symbol,
             event_bus=event_bus,
             order_manager=order_manager,
             mode=self.strategy_params.get('mode', 'AUTO'),
-            timeframes=self.strategy_params.get('timeframes', ['1m'])
         )
         strategy.initial_capital = self.initial_capital
         strategy.current_equity = self.initial_capital
+
         if 'state' in self.strategy_params:
             strategy.load_state(self.strategy_params['state'])
 
-        # Переменные для отложенных ордеров
-        pending_orders: List[Order] = []  # ордера, ожидающие исполнения на следующем баре
-        equity_curve = [(df.index[0], self.initial_capital)]
-        strategy._bt_entry_price = None  # используется в _patch_send_order
+        # Определяем тикеры/таймфреймы для подачи свечей
+        subscriptions = strategy.subscriptions
+        if not subscriptions:
+            # Fallback: берём symbol из params и таймфрейм 1m
+            symbol = self.strategy_params.get('symbol')
+            if symbol:
+                subscriptions = [(symbol, '1m')]
+            else:
+                return self._empty_result(error="strategy.subscriptions пуст и symbol не указан в params")
 
-        # Подмена send_order (добавляет ордер в очередь вместо немедленного исполнения)
+        # Проверяем наличие данных для всех тикеров
+        for sym, tf in subscriptions:
+            if tf != 'tick' and sym not in self.data:
+                return self._empty_result(error=f"Нет данных для символа {sym}")
+
+        # Строим общий временной ряд из всех подписок
+        all_timestamps = set()
+        for sym, tf in subscriptions:
+            if tf != 'tick' and sym in self.data:
+                all_timestamps.update(self.data[sym].index)
+        timestamps = sorted(all_timestamps)
+
+        if not timestamps:
+            return self._empty_result()
+
+        logger.info(
+            f"Запуск бэктеста: {[sym for sym,_ in subscriptions]}, "
+            f"свечей: {len(timestamps)}, модель: {self.execution_model}"
+        )
+        if progress_callback:
+            progress_callback(0, len(timestamps))
+
+        # Отложенные ордера: symbol -> list[Order]
+        pending_orders: List[Order] = []
+
+        # Патчим send_order
         self._patch_send_order(strategy, pending_orders)
 
-        try:
-            for i, (ts, row) in enumerate(df.iterrows()):
+        equity_curve = [(timestamps[0], self.initial_capital)]
+
+        async def _run_backtest():
+            for i, ts in enumerate(timestamps):
                 if i % 100 == 0:
-                    logger.debug(f"Свеча {i}/{len(df)}")
+                    logger.debug(f"Свеча {i}/{len(timestamps)}")
                     if progress_callback:
-                        progress_callback(i, len(df))
+                        progress_callback(i, len(timestamps))
 
-                candle = Candle(
-                    symbol=symbol, timeframe='1m',
-                    open=row['Open'], high=row['High'], low=row['Low'],
-                    close=row['Close'], volume=row['Volume'],
-                    timestamp=ts, is_complete=True
-                )
-
-                # 1. Сначала исполняем отложенные ордера по ценам этой свечи
-                for order in pending_orders:
-                    self._execute_order(order, candle, strategy, ts)
-
+                # 1. Исполняем отложенные ордера
+                for order in list(pending_orders):
+                    sym = order.symbol
+                    if sym in self.data and ts in self.data[sym].index:
+                        row = self.data[sym].loc[ts]
+                        self._execute_order(order, row, strategy, ts)
                 pending_orders.clear()
 
-                # 2. Обрабатываем свечу стратегией (она может добавить новые ордера)
-                asyncio.run(strategy.on_candle(candle))
+                # 2. Подаём свечи стратегии
+                for sym, tf in subscriptions:
+                    if tf == 'tick':
+                        continue
+                    if sym in self.data and ts in self.data[sym].index:
+                        row = self.data[sym].loc[ts]
+                        candle = Candle(
+                            symbol=sym, timeframe=tf,
+                            open=row['Open'], high=row['High'],
+                            low=row['Low'], close=row['Close'],
+                            volume=row['Volume'],
+                            timestamp=ts, is_complete=True,
+                        )
+                        await strategy.on_candle(candle)
 
-                # 3. Фиксируем эквити (после возможных исполнений и сигналов)
+                # 3. Фиксируем эквити
                 equity_curve.append((ts, strategy.current_equity))
 
-        except Exception as e:
-            logger.exception(f"Ошибка на свече {i}: {e}")
-            return self._empty_result(error=str(e))
+        asyncio.run(_run_backtest())
 
-        # Метрики
         eq_df = pd.DataFrame(equity_curve, columns=['timestamp', 'equity'])
         metrics = calculate_metrics(eq_df, strategy.trades)
-        logger.info(f"Бэктест завершён. Сделок: {len(strategy.trades)}, финальная эквити: {strategy.current_equity:.2f}")
+        logger.info(
+            f"Бэктест завершён. Сделок: {len(strategy.trades)}, "
+            f"финальная эквити: {strategy.current_equity:.2f}"
+        )
 
         return {
             'equity_curve': eq_df,
             'trades': strategy.trades,
             'metrics': metrics,
             'final_equity': strategy.current_equity,
-            'num_candles': len(df),
+            'num_candles': len(timestamps),
         }
 
-    def _execute_order(self, order: Order, candle: Candle, strategy: Strategy, timestamp: datetime):
-        """Исполняет ордер по худшей цене следующей свечи (или по Open)."""
-        # Выбор цены исполнения (можно изменить на candle.open при необходимости)
-        # if order.side == OrderSide.BUY:
-        #     fill_price = candle.high   # худшая для покупки
-        # else:
-        #     fill_price = candle.low    # худшая для продажи
-        fill_price = candle.open     # раскомментировать для исполнения по Open
+    def _execute_order(self, order: Order, row: pd.Series, strategy: Strategy, timestamp: datetime):
+        """Исполняет ордер по Open следующего бара (или по High/Low при next_bar_worst)."""
+        symbol = order.symbol
+        if self.execution_model == 'next_bar_worst':
+            fill_price = row['High'] if order.side == OrderSide.BUY else row['Low']
+        else:
+            fill_price = row['Open']
 
-        comm = self.commission.calculate(order.symbol, fill_price, order.volume, order.side)
+        comm = self.commission.calculate(symbol, fill_price, order.volume, order.side)
         delta = order.volume if order.side == OrderSide.BUY else -order.volume
 
-        if strategy.position * delta >= 0:          # Наращиваем позицию (в ту же сторону)
-            if strategy.position == 0:
-                strategy._bt_entry_price = fill_price
-            else:
-                total_abs = abs(strategy.position) + order.volume
-                strategy._bt_entry_price = (
-                    strategy._bt_entry_price * abs(strategy.position) + fill_price * order.volume
+        pos = strategy.positions.get(symbol, 0.0)
+        entry = strategy.entry_prices.get(symbol)
+
+        if pos * delta >= 0:  # Наращиваем / открываем позицию
+            if pos == 0:
+                strategy.entry_prices[symbol] = fill_price
+            elif entry is not None:
+                total_abs = abs(pos) + order.volume
+                strategy.entry_prices[symbol] = (
+                    entry * abs(pos) + fill_price * order.volume
                 ) / total_abs
-            strategy.position += delta
+            else:
+                strategy.entry_prices[symbol] = fill_price
+            strategy.positions[symbol] = pos + delta
             strategy.current_equity -= comm
 
-        else:                                       # Закрываем позицию (частично или полностью)
-            close_volume = min(abs(delta), abs(strategy.position))
-            if strategy.position > 0:               # Закрываем лонг
-                pnl = (fill_price - strategy._bt_entry_price) * close_volume - comm
-            else:                                   # Закрываем шорт
-                pnl = (strategy._bt_entry_price - fill_price) * close_volume - comm
+        else:  # Закрываем / переворачиваем позицию
+            if entry is None:
+                logger.warning(f"Закрытие без цены входа по {symbol}, пропускаем")
+                return
+            close_volume = min(abs(delta), abs(pos))
+            if pos > 0:
+                pnl = (fill_price - entry) * close_volume - comm
+            else:
+                pnl = (entry - fill_price) * close_volume - comm
 
             strategy.current_equity += pnl
-            strategy.position += delta
+            new_pos = pos + delta
+            strategy.positions[symbol] = new_pos
 
-            # Фиксируем сделку
-            direction = 'long' if delta < 0 else 'short'  # если продаём, значит закрывали лонг
+            if new_pos == 0:
+                strategy.entry_prices.pop(symbol, None)
+            elif (new_pos > 0) != (pos > 0):  # переворот
+                strategy.entry_prices[symbol] = fill_price
+
+            direction = 'long' if delta < 0 else 'short'
             strategy.trades.append(Trade(
                 entry_time=timestamp, exit_time=timestamp,
-                symbol=order.symbol,
+                symbol=symbol,
                 direction=direction,
-                entry_price=strategy._bt_entry_price,
+                entry_price=entry,
                 exit_price=fill_price,
                 volume=close_volume,
                 commission=comm,
                 slippage=0.0,
                 pnl=pnl,
-                exit_reason='signal'
+                exit_reason='signal',
             ))
 
-            # Сброс или обновление цены входа
-            if strategy.position == 0:
-                strategy._bt_entry_price = None
-            elif (strategy.position > 0) != (delta > 0):  # произошёл переворот позиции
-                strategy._bt_entry_price = fill_price
+        strategy._last_prices[symbol] = fill_price
 
     def _patch_send_order(self, strategy: Strategy, pending_orders: List[Order]):
-        """Подменяет send_order, чтобы он добавлял ордер в список отложенных."""
         async def async_send(order: Order) -> str:
             pending_orders.append(order)
             return "pending"
@@ -183,5 +222,5 @@ class BacktestEngine:
             'metrics': {},
             'final_equity': self.initial_capital,
             'num_candles': 0,
-            'error': error
+            'error': error,
         }

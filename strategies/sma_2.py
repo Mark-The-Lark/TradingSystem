@@ -1,6 +1,3 @@
-
-
-
 from core.strategy import Strategy
 from core.models import Order, OrderSide, OrderType, Candle, Tick
 import pandas as pd
@@ -11,7 +8,7 @@ class SMACrossoverStrategy2(Strategy):
         self.fast = fast
         self.slow = slow
         if not self.subscriptions:
-            # По умолчанию один символ – можно задать через параметры
+            # По умолчанию один символ
             self.subscriptions = [('AFLT', '1m')]
 
     async def on_tick(self, tick: Tick):
@@ -28,7 +25,6 @@ class SMACrossoverStrategy2(Strategy):
 
         ts = df['timestamp']
         close = df['close'].values
-        # Создаём Series с DatetimeIndex
         close_series = pd.Series(close, index=pd.DatetimeIndex(ts))
         sma_fast = close_series.rolling(window=self.fast).mean()
         sma_slow = close_series.rolling(window=self.slow).mean()
@@ -43,9 +39,8 @@ class SMACrossoverStrategy2(Strategy):
 
         if sma_fast.iloc[-2] <= sma_slow.iloc[-2] and sma_fast.iloc[-1] > sma_slow.iloc[-1]:
             if pos == 0:
-                price = candle.close
                 order = Order(
-                    client_order_id=f"sma-{candle.timestamp.timestamp()}",
+                    client_order_id=f"sma2-{candle.timestamp.timestamp()}",
                     strategy_name=self.name,
                     symbol=symbol,
                     side=OrderSide.BUY,
@@ -56,9 +51,8 @@ class SMACrossoverStrategy2(Strategy):
 
         elif sma_fast.iloc[-2] >= sma_slow.iloc[-2] and sma_fast.iloc[-1] < sma_slow.iloc[-1]:
             if pos > 0:
-                price = candle.close
                 order = Order(
-                    client_order_id=f"sma-{candle.timestamp.timestamp()}",
+                    client_order_id=f"sma2-{candle.timestamp.timestamp()}",
                     strategy_name=self.name,
                     symbol=symbol,
                     side=OrderSide.SELL,
@@ -66,10 +60,11 @@ class SMACrossoverStrategy2(Strategy):
                     volume=pos
                 )
                 await self.send_order(order)
+
     def get_default_plot_config(self) -> dict:
         if not self.subscriptions:
             return {}
-        sym = self.subscriptions[0][0]  # первый символ
+        sym = self.subscriptions[0][0]
         return {
             "price": [f"sma_fast_{sym}", f"sma_slow_{sym}"]
         }

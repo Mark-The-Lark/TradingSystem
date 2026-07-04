@@ -1,8 +1,8 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock
-from core.events import EventBus, TickEvent, CandleEvent, OrderRequestEvent, OrderFilledEvent
-from core.models import Tick, Order, OrderSide, OrderType, OrderStatus
+from core.events import EventBus, OrderRequestEvent, OrderFilledEvent
+from core.models import Order, OrderSide, OrderType, OrderStatus
 from core.commission import FixedCommission
 from core.risk_manager import RiskManager
 from core.order_manager import OrderManager
@@ -57,7 +57,6 @@ async def test_market_order_fill(event_bus, order_manager, mock_gateway, risk_ma
     ))
     await asyncio.sleep(0.1)
     assert history[0].status == OrderStatus.FILLED
-    # assert history[0].filled_volume == 10
     # Проверяем позицию в риск-менеджере
     assert risk_manager._current_positions.get("test_strategy") == 10
 

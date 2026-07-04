@@ -32,7 +32,7 @@ class CapitalPanel(QWidget):
         self.total_label.setText(f"Общий капитал: {cm.total_capital:.2f}")
 
         # Создаём виджеты для каждой стратегии
-        for name in self.strategy_manager._strategies.items():
+        for name in self.strategy_manager._strategies.keys():
             group = QGroupBox(f"{name}") #({strategy.symbol})
             vbox = QVBoxLayout(group)
             hbox = QHBoxLayout()

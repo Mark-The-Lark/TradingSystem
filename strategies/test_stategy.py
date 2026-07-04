@@ -1,5 +1,3 @@
-
-
 from core.strategy import Strategy
 from core.models import Order, OrderSide, OrderType, Tick, Candle
 from datetime import datetime

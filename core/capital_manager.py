@@ -39,20 +39,54 @@ class CapitalManager:
 
     def get_available_capital(self, strategy_name: str) -> float:
         """
-        Доступный капитал = выделенный – (текущая стоимость позиций).
-        Стоимость позиций считается как сумма(abs(pos) * last_price) по всем символам стратегии.
+        Доступный капитал с учётом персонального плеча стратегии.
+
+        Формула:
+            effective = allocated * min(strategy.leverage, self.max_leverage)
+            available = effective - used_margin
+
+        strategy.leverage > 1.0 → стратегия может использовать больше выделенной квоты
+                                   (заёмный капитал в рамках max_leverage).
+        strategy.leverage < 1.0 → стратегия работает консервативно, использует только
+                                   часть выделенного капитала.
         """
         strategy = self._strategies.get(strategy_name)
         if not strategy:
             return 0.0
         allocated = self.get_allocated_capital(strategy_name)
+        # Применяем плечо стратегии, ограниченное глобальным max_leverage
+        leverage = getattr(strategy, 'leverage', 1.0)
+        effective_leverage = min(leverage, self.max_leverage)
+        effective_capital = allocated * effective_leverage
+        # Вычитаем текущую маржу (рыночная стоимость открытых позиций)
         used = 0.0
         for sym, pos in strategy.positions.items():
             price = strategy._last_prices.get(sym, 0.0)
             if price > 0:
                 used += abs(pos) * price
-        return max(0.0, allocated - used)
+        return max(0.0, effective_capital - used)
 
     def redistribute(self):
         # заглушка
         pass
+
+    # --- Сохранение / восстановление состояния ---
+    def save_state(self) -> dict:
+        """Сериализует конфигурацию капитала."""
+        return {
+            'total_capital': self.total_capital,
+            'max_leverage': self.max_leverage,
+            'shares': dict(self.shares),
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Восстанавливает конфигурацию капитала. Стратегии регистрируются позже через set_strategy."""
+        self.total_capital = state.get('total_capital', self.total_capital)
+        self.max_leverage = state.get('max_leverage', self.max_leverage)
+        saved_shares = state.get('shares', {})
+        for name, share in saved_shares.items():
+            self.shares[name] = share
+        logger.info(
+            f"CapitalManager state loaded: total_capital={self.total_capital}, "
+            f"shares={self.shares}"
+        )

@@ -1,5 +1,3 @@
-
-
 import asyncio
 import logging
 from concurrent.futures import Future
@@ -22,10 +20,7 @@ class MainWindow(QMainWindow):
         self.event_bus = event_bus
         self.strategy_manager = strategy_manager
         self.registry = registry
-        self.async_loop = async_loop  # экземпляр AsyncLoopThread
-        print(f"DEBUG: async_loop type: {type(self.async_loop)}")
-        if not hasattr(self.async_loop, 'run_coroutine'):
-            raise TypeError("async_loop must be an instance of AsyncLoopThread with run_coroutine method")
+        self.async_loop = async_loop
         self.setWindowTitle("Торговая система")
         self.resize(1200, 700)
 
@@ -41,19 +36,26 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.start_all_btn)
         control_layout.addWidget(self.stop_all_btn)
         control_layout.addWidget(self.add_btn)
+
+        self.backtest_btn = QPushButton("Бэктест")
+        control_layout.addWidget(self.backtest_btn)
+        self.capital_btn = QPushButton("Капитал")
+        control_layout.addWidget(self.capital_btn)
         control_layout.addStretch()
         layout.addLayout(control_layout)
 
         # Таблица стратегий
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels(["Имя", "Класс", "Режим", "Позиция", "Эквити", "P&L", "Статус", "Сигналы"])
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(
+            ["Имя", "Класс", "Режим", "Позиция", "Эквити", "P&L", "Статус", "Сигналы"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.cellDoubleClicked.connect(self.open_detail_panel)
         layout.addWidget(self.table)
 
-        # Кнопки действий
+        # Кнопки действий над выбранной стратегией
         action_layout = QHBoxLayout()
         self.stop_btn = QPushButton("Стоп")
         self.start_btn = QPushButton("Старт")
@@ -64,70 +66,60 @@ class MainWindow(QMainWindow):
         action_layout.addStretch()
         layout.addLayout(action_layout)
 
-        self.backtest_btn = QPushButton("Бэктест")
-        control_layout.addWidget(self.backtest_btn)
-        self.backtest_btn.clicked.connect(self.open_backtest_dialog)
-        self.capital_btn = QPushButton("Капитал")
-        control_layout.addWidget(self.capital_btn)
-        self.capital_btn.clicked.connect(self.open_capital_panel)
-
-        # Соединения (обычные слоты)
+        # Соединения
         self.start_all_btn.clicked.connect(self.on_start_all)
         self.stop_all_btn.clicked.connect(self.on_stop_all)
         self.add_btn.clicked.connect(self.on_add_strategy)
         self.stop_btn.clicked.connect(self.on_stop_selected)
         self.start_btn.clicked.connect(self.on_start_selected)
         self.remove_btn.clicked.connect(self.on_remove_selected)
+        self.backtest_btn.clicked.connect(self.open_backtest_dialog)
+        self.capital_btn.clicked.connect(self.open_capital_panel)
 
-        # Таймер обновления таблицы (периодически дёргаем refresh_table)
+        # Таймер обновления таблицы
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh_table)
         self.timer.start(2000)
 
         self.detail_panel = None
+        self.capital_panel = None
         self.refresh_table()
 
-    # --- Утилита для вызова асинхронных функций ---
     def _run_async(self, coro):
-        """Запускает корутину в фоновом asyncio цикле и дожидается результата (блокирует GUI)."""
+        """Запускает корутину в фоновом asyncio-цикле и блокирующе ждёт результата."""
         future = self.async_loop.run_coroutine(coro)
-        return future.result()  # блокирующий вызов
-
-    # Слот для отображения ошибок из другого потока
-    def show_error(self, message):
-        QMessageBox.critical(self, "Ошибка", message)
+        return future.result()
 
     def refresh_table(self):
         snapshots = self.strategy_manager.get_all_snapshots()
         self.table.setRowCount(len(snapshots))
         for i, snap in enumerate(snapshots):
             self.table.setItem(i, 0, QTableWidgetItem(snap['name']))
-            # self.table.setItem(i, 1, QTableWidgetItem(snap['symbol']))
-            # self.table.setItem(i, 1, QTableWidgetItem(", ".join(snap.get('symbols', []))))
             strategy = self.strategy_manager._strategies.get(snap['name'])
             class_name = type(strategy).__name__ if strategy else ""
             self.table.setItem(i, 1, QTableWidgetItem(class_name))
             self.table.setItem(i, 2, QTableWidgetItem(snap['mode']))
-            # self.table.setItem(i, 3, QTableWidgetItem(str(snap['position'])))
             self.table.setItem(i, 3, QTableWidgetItem(snap.get('position_str', '')))
-            # self.table.setItem(i, 4, QTableWidgetItem(f"{snap['equity']:.2f}"))
+
             equity_item = QTableWidgetItem(f"{snap['equity']:.2f}")
             equity_color = Qt.GlobalColor.green if snap['equity'] > 0 else Qt.GlobalColor.red
             equity_item.setForeground(equity_color)
             self.table.setItem(i, 4, equity_item)
-            # self.table.setItem(i, 5, QTableWidgetItem(f"{snap.get('pnl', 0.0):.2f}"))
+
             pnl = snap.get('pnl', 0.0)
             pnl_item = QTableWidgetItem(f"{pnl:.2f}")
             pnl_color = Qt.GlobalColor.green if pnl >= 0 else Qt.GlobalColor.red
             pnl_item.setForeground(pnl_color)
             self.table.setItem(i, 5, pnl_item)
+
             self.table.setItem(i, 6, QTableWidgetItem(snap['status']))
             self.table.setItem(i, 7, QTableWidgetItem(str(snap['signals'])))
 
     def selected_strategy_name(self):
         row = self.table.currentRow()
         if row >= 0:
-            return self.table.item(row, 0).text()
+            item = self.table.item(row, 0)
+            return item.text() if item else None
         return None
 
     # --- Обработчики кнопок ---
@@ -142,9 +134,6 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             try:
                 name = dialog.name_edit.text().strip()
-                # symbol = dialog.symbol_edit.text().strip()
-                # mode = dialog.mode_combo.currentText()
-                # timeframes = [tf.strip() for tf in dialog.timeframes_edit.text().split(',') if tf.strip()]
                 class_name = dialog.class_combo.currentText()
                 cls = self.registry.get(class_name)
                 if not cls:
@@ -152,13 +141,9 @@ class MainWindow(QMainWindow):
                     return
                 strategy = cls(
                     name=name,
-                    # symbol=symbol,
                     event_bus=self.event_bus,
                     order_manager=self.strategy_manager.order_manager,
-                    # mode=mode,
-                    # timeframes=timeframes
                 )
-                # Блокируем GUI пока не добавим стратегию (короткая операция)
                 self._run_async(self.strategy_manager.add_strategy(strategy))
                 self.refresh_table()
                 logger.info(f"Стратегия {name} добавлена")
@@ -200,16 +185,28 @@ class MainWindow(QMainWindow):
         dialog = PortfolioBacktestDialog(self.event_bus, self.async_loop, parent=self)
         dialog.exec()
 
+    def open_capital_panel(self):
+        if self.capital_panel is None:
+            from gui.capital_panel import CapitalPanel
+            self.capital_panel = CapitalPanel(self.strategy_manager)
+        self.capital_panel.show()
+        self.capital_panel.raise_()
+        self.capital_panel.refresh()
+
     def closeEvent(self, event):
         # Собираем запущенные стратегии с ненулевыми позициями
         active_positions = []
         for name, s in self.strategy_manager._strategies.items():
-            if s._status == 'RUNNING' and s.position != 0:
-                active_positions.append(f"{name} ({s.symbol}): {s.position:.2f}")
+            if s._status == 'RUNNING':
+                pos_parts = [f"{sym}:{pos:.2f}" for sym, pos in s.positions.items() if pos != 0]
+                if pos_parts:
+                    active_positions.append(f"{name}: {', '.join(pos_parts)}")
 
-        # if active_positions:
-        msg = "У следующих стратегий открыты позиции:\n" + "\n".join(active_positions)
-        msg += "\n\nОстановить стратегии и выйти?"
+        msg = ""
+        if active_positions:
+            msg = "У следующих стратегий открыты позиции:\n" + "\n".join(active_positions) + "\n\n"
+        msg += "Остановить стратегии и выйти?"
+
         reply = QMessageBox.question(
             self, "Подтверждение выхода", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -219,17 +216,5 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
-        # Остановка всех стратегий (используем ваш синхронный _run_async)
-        async def shutdown():
-            await self.strategy_manager.stop_all()
-
-        self._run_async(shutdown())   # дожидается завершения stop_all()
-        event.accept()                # разрешаем закрытие окна
-
-    def open_capital_panel(self):
-        if not hasattr(self, 'capital_panel') or self.capital_panel is None:
-            from gui.capital_panel import CapitalPanel
-            self.capital_panel = CapitalPanel(self.strategy_manager)
-        self.capital_panel.show()
-        self.capital_panel.raise_()
-        self.capital_panel.refresh()  # обновить данные
+        self._run_async(self.strategy_manager.stop_all())
+        event.accept()

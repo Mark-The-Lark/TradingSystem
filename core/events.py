@@ -70,7 +70,3 @@ class OrderRejectedEvent(Event):
 @dataclass(frozen=True)
 class OrderRequestEvent(Event):
     order: Order
-
-@dataclass(frozen=True)
-class ConnectionStateEvent(Event):
-    state: str  # 'connected', 'disconnected', 'reconnecting'

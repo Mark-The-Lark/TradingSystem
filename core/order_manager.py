@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from core.events import EventBus, OrderPlacedEvent, OrderFilledEvent, OrderCancelledEvent, OrderRejectedEvent, OrderRequestEvent
-from core.models import Order, OrderStatus, OrderSide, OrderType
+from core.models import Order, OrderStatus, OrderSide, OrderType, TimeInForce
 from core.gateway import BaseGateway
 from core.commission import CommissionModel
 from core.risk_manager import RiskManager, RiskLimitExceeded
@@ -127,4 +127,42 @@ class OrderManager:
             return [o for o in self._order_history if o.strategy_name == strategy_name]
         return list(self._order_history)
     def get_order_by_client_id(self, client_order_id: str) -> Optional[Order]:
-        return self._active_orders.get(client_order_id) or next((o for o in self._order_history if o.client_order_id == client_order_id), None)
+        return self._active_orders.get(client_order_id) or next(
+            (o for o in self._order_history if o.client_order_id == client_order_id), None
+        )
+
+    # --- Сохранение / восстановление состояния ---
+    def save_state(self) -> dict:
+        """Сериализует активные ордера и историю для сохранения между сессиями."""
+        return {
+            'active_orders': [o.model_dump(mode='json') for o in self._active_orders.values()],
+            'order_history': [o.model_dump(mode='json') for o in self._order_history],
+        }
+
+    def load_state(self, state: dict) -> None:
+        """
+        Восстанавливает историю ордеров из сохранённого состояния.
+        Активные ордера при восстановлении помечаются CANCELLED, так как
+        их реальный статус неизвестен (нужно сверить с брокером при reconnect).
+        """
+        from core.models import OrderStatus
+        history_data = state.get('order_history', [])
+        for raw in history_data:
+            try:
+                self._order_history.append(Order(**raw))
+            except Exception as e:
+                logger.warning(f"Skipping invalid order in history: {e}")
+
+        active_data = state.get('active_orders', [])
+        for raw in active_data:
+            try:
+                order = Order(**raw)
+                # Помечаем как CANCELLED — статус будет уточнён при reconnect
+                order.status = OrderStatus.CANCELLED
+                self._order_history.append(order)
+                logger.warning(
+                    f"Order {order.client_order_id} was active at shutdown; "
+                    f"marked CANCELLED. Verify with broker on reconnect."
+                )
+            except Exception as e:
+                logger.warning(f"Skipping invalid active order: {e}")

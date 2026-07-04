@@ -24,6 +24,16 @@ class StateStore(ABC):
     async def load_strategies_list(self) -> Optional[list]:
         ...
 
+    @abstractmethod
+    async def save_component_state(self, component_name: str, state: dict) -> None:
+        """Сохраняет состояние произвольного компонента (OrderManager, CapitalManager и т.д.)."""
+        ...
+
+    @abstractmethod
+    async def load_component_state(self, component_name: str) -> Optional[dict]:
+        """Загружает состояние компонента. Возвращает None если не найдено."""
+        ...
+
 class JsonStateStore(StateStore):
     def __init__(self, base_path: str = "data/states"):
         self.base_path = base_path
@@ -58,3 +68,17 @@ class JsonStateStore(StateStore):
             with open(self._strategies_file, "r") as f:
                 return json.load(f)
         return []
+
+    async def save_component_state(self, component_name: str, state: dict) -> None:
+        """Сохраняет состояние компонента в <component_name>_state.json."""
+        path = os.path.join(self.base_path, f"{component_name}_state.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=str)
+
+    async def load_component_state(self, component_name: str) -> Optional[dict]:
+        """Загружает состояние компонента. Возвращает None если файл не найден."""
+        path = os.path.join(self.base_path, f"{component_name}_state.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return None

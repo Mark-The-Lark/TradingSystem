@@ -83,8 +83,12 @@ def main():
                 await strategy_manager.add_strategy(strategy)
                 logger.info(f"Loaded strategy {meta['name']}")
 
-    # Ожидаем завершения загрузки, чтобы окно увидело уже существующие стратегии
-    async_loop.run_coroutine(load_initial()).result()
+    # Загружаем состояния компонентов и стратегий
+    async def boot():
+        await strategy_manager.load_component_states()
+        await load_initial()
+
+    async_loop.run_coroutine(boot()).result()
 
     # Создаём главное окно
     window = MainWindow(event_bus, strategy_manager, STRATEGY_REGISTRY, async_loop)
