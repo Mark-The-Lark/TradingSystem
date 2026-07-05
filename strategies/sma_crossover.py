@@ -75,7 +75,7 @@ class SMACrossoverStrategy(Strategy):
         self.slow = slow
         if not self.subscriptions:
             # По умолчанию один символ – можно задать через параметры
-            self.subscriptions = [('AFKS', '1m')]
+            self.subscriptions = [('SRU6', '1m')]
 
     async def on_tick(self, tick: Tick):
         pass

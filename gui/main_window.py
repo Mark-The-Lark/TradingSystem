@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
             self.detail_panel.show()
             self.detail_panel.raise_()
         else:
-            self.detail_panel = DetailPanel(name, self.strategy_manager)
+            self.detail_panel = DetailPanel(name, self.strategy_manager,  self.async_loop)
             self.detail_panel.show()
 
     def open_backtest_dialog(self):

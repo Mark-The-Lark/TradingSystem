@@ -768,3 +768,22 @@ class Strategy(ABC):
             for tf, df in sym_hist.items():
                 if not df.empty:
                     self._last_prices[sym] = df['close'].iloc[-1]
+
+    async def emergency_exit(self):
+        """Закрывает все открытые позиции рыночными ордерами."""
+        for symbol, pos in self.positions.items():
+            if pos == 0:
+                continue
+            side = OrderSide.SELL if pos > 0 else OrderSide.BUY
+            order = Order(
+                client_order_id=f"emergency_{symbol}_{int(datetime.now().timestamp())}",
+                strategy_name=self.name,
+                symbol=symbol,
+                side=side,
+                order_type=OrderType.MARKET,
+                volume=abs(pos),
+            )
+            await self.send_order(order)
+            logger.info(f"Экстренное закрытие {symbol}: {pos} по рынку")
+            self.positions[symbol] = 0
+            self.entry_prices.pop(symbol, None)

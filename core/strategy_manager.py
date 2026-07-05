@@ -272,6 +272,15 @@ class StrategyManager:
         await self._save_component_states()
         await self.gateway.disconnect()
 
+    async def emergency_exit(self, strategy_name: str):
+        strategy = self._strategies.get(strategy_name)
+        if strategy:
+            await strategy.emergency_exit()
+    async def cancel_all_orders_for_strategy(self, strategy_name: str):
+        orders = self.get_active_orders(strategy_name)
+        for order in orders:
+            await self.cancel_order(order.client_order_id)
+
     async def _save_component_states(self) -> None:
         """Сохраняет состояния OrderManager и CapitalManager."""
         try:
