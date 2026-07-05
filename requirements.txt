@@ -1,0 +1,7 @@
+numpy
+pandas
+asyncio
+pytest
+quik-python
+pyqt6
+pyqtgraph
