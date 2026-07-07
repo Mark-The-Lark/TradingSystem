@@ -9,11 +9,9 @@ from PyQt6.QtCore import QTimer, Qt, QRectF, QPointF
 import pyqtgraph as pg
 import numpy as np
 from datetime import datetime
-from config import QUIK_ENABLED
 import asyncio
 
 logger = logging.getLogger(__name__)
-# TFS_DICT = {'1m': 60, '5m': 300, '1h': 3600} if QUIK_ENABLED else {'1m': 1, '5m': 5, '1h': 60}
 class IndexedDateAxis(pg.AxisItem):
     """Ось, отображающая даты по индексам элементов, чтобы скрыть разрывы."""
     def __init__(self, orientation='bottom', **kwargs):
