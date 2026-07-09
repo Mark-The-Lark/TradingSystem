@@ -136,6 +136,10 @@ class MainWindow(QMainWindow):
                 name = dialog.name_edit.text().strip()
                 class_name = dialog.class_combo.currentText()
                 cls = self.registry.get(class_name)
+                if not name:
+                    QMessageBox.warning(self,'Ошибка', 'Имя не может быть пустым')
+                    return
+
                 if not cls:
                     QMessageBox.warning(self, "Ошибка", f"Класс {class_name} не найден")
                     return
@@ -144,6 +148,7 @@ class MainWindow(QMainWindow):
                     event_bus=self.event_bus,
                     order_manager=self.strategy_manager.order_manager,
                 )
+
                 self._run_async(self.strategy_manager.add_strategy(strategy))
                 self.refresh_table()
                 logger.info(f"Стратегия {name} добавлена")
