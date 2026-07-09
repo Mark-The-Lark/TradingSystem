@@ -18,6 +18,7 @@ class HistoricalDataGateway(BaseGateway):
         self.data = data              # ticker -> DataFrame свечей (минутные)
         self._subscriptions: Dict[str, Set[tuple]] = {}  # strategy_name -> set of (ticker, timeframe)
         self._last_index: Dict[tuple, datetime] = {}      # (ticker, timeframe) -> последнее отданное время
+        self._last_price_cache: Dict[str, float] = {}
         # Для поддержки таймфреймов, отличных от 1m, потребуется ресамплинг. Пока упростим – только 1m.
         # Если стратегия подписывается на 5m, мы будем ресамплить на лету.
 
@@ -122,8 +123,11 @@ class HistoricalDataGateway(BaseGateway):
                     )
                     # Сначала переводим часы на время свечи, чтобы стратегии видели актуальное время
                     self.clock.set_time(ts + timedelta(seconds=1))  # после закрытия свечи
+                    self._last_price_cache[symbol] = candle.close
                     await self.event_bus.publish(f"market.candle.{symbol}.{tf}", CandleEvent(candle=candle))
                     published = True
                 # Обновляем последний индекс
                 self._last_index[key] = new_candles.index[-1]
         return published
+    async def get_last_price(self, symbol: str) -> Optional[float]:
+        return self._last_price_cache.get(symbol)

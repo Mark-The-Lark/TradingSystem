@@ -16,20 +16,35 @@ class CapitalManager:
         self.max_leverage = max_leverage
         self.shares: Dict[str, int] = {}  # целые доли
         self._strategies: Dict[str, Strategy] = {}
+        self._limits: Dict[str, float] = {}
+        self._used: Dict[str, float] = {}
+        self._using_cap: Dict[str, float] = {}
+        self._extra: Dict[str, float] = {}        # дополнительный капитал (сверх лимита)
+        self._free = total_capital 
 
-    def set_share(self, name: str, share: int):
-        self.shares[name] = share
+    def set_share(self, strategy_name: str, share: int):
+        self.shares[strategy_name] = share
+        self._used.pop(strategy_name, None)
+        self._using_cap.pop(strategy_name, None)
+        self._extra.pop(strategy_name, None)
+        self._redistribute()
 
-    def get_share(self, name: str) -> int:
-        return self.shares.get(name, 0)
+    def set_used(self, strategy_name: str, amount: float) -> None:
+        """Устанавливает реально занятый капитал (из OrderManager)."""
+        if strategy_name not in self._strategies:
+            return
+        self._used[strategy_name] = min(amount, self._limits[strategy_name])
+        self._redistribute()
 
     def set_strategy(self, strategy: Strategy, share: int = 0):
         self.shares[strategy.name] = share
         self._strategies[strategy.name] = strategy
+        self._using_cap[strategy.name] = 1.0
 
     def remove_strategy(self, name: str):
         self.shares.pop(name, None)
         self._strategies.pop(name, None)
+        self._using_cap.pop(name, None)
 
     def get_allocated_capital(self, name: str) -> float:
         total_shares = sum(self.shares.values())

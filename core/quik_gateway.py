@@ -80,6 +80,7 @@ class QuikGateway(BaseGateway):
 
         self._quik: Optional[Quik] = None
         self._connected = False
+        self._last_trade_price: Dict[str, float] = {}
 
         # Маппинг client_order_id → order_num
         self._client_to_quik_order: Dict[str, int] = {}
@@ -338,6 +339,7 @@ class QuikGateway(BaseGateway):
             last=all_trade.price,
             volume=all_trade.quantity,
         )
+        self._last_price_cache[all_trade.sec_code] = all_trade.price
         await self.event_bus.publish(f'market.tick.{all_trade.sec_code}', TickEvent(tick=tick))
 
     # ===================== Свечи (через CandleFunctions) =====================
@@ -392,6 +394,7 @@ class QuikGateway(BaseGateway):
             timestamp=dt_local,
             is_complete=True,
         )
+        self._last_price_cache[symbol] = candle.close
         await self.event_bus.publish(
             f'market.candle.{symbol}.{timeframe}',
             CandleEvent(candle=our_candle),
@@ -538,3 +541,5 @@ class QuikGateway(BaseGateway):
         if not code:
             raise KeyError(f"class_code не найден для '{symbol}'")
         return code
+    async def get_last_price(self, symbol: str) -> Optional[float]:
+        return self._last_trade_price.get(symbol)

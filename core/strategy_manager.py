@@ -77,6 +77,7 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"Failed to start strategy {name}: {e}")
             strategy.set_status('ERROR')
+            await self._unsubscribe_strategy_data(strategy)
 
     async def stop_strategy(self, name: str) -> None:
         strategy = self._strategies.get(name)

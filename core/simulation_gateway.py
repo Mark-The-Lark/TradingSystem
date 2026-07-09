@@ -210,3 +210,5 @@ class SimulationGateway(BaseGateway):
                                 open=o, high=h, low=l, close=c,
                                 volume=v, timestamp=ts, is_complete=True))
         return candles
+    async def get_last_price(self, symbol: str) -> Optional[float]:
+        return self._market.get_price(symbol)

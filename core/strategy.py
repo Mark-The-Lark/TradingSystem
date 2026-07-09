@@ -23,7 +23,7 @@ class Strategy(ABC):
         self.event_bus = event_bus
         self.order_manager = order_manager
         self.mode = mode
-
+        self.using_cap = 1.0 
         # Подписки: список (symbol, timeframe), где timeframe может быть 'tick'
         self.subscriptions: List[Tuple[str, str]] = subscriptions or []
 
@@ -279,7 +279,7 @@ class Strategy(ABC):
         
         volume = (available_capital * risk_fraction * weight) / price
         """
-        available = self.get_available_capital()
+        available = self.get_available_capital() * self.using_cap
         if available <= 0 or price <= 0:
             return 0.0
         max_volume = available / price
@@ -308,7 +308,7 @@ class Strategy(ABC):
         if entry_price == stop_price:
             logger.warning(f"{self.name}: entry_price == stop_price для {symbol}, размер позиции = 0")
             return 0.0
-        available = self.get_available_capital()
+        available = self.get_available_capital() * self.using_cap
         if available <= 0:
             return 0.0
         risk_amount = available * risk_pct * self.weight
@@ -506,3 +506,8 @@ class Strategy(ABC):
             logger.info(f"Экстренное закрытие {symbol}: {pos} по рынку")
             self.positions[symbol] = 0
             self.entry_prices.pop(symbol, None)
+    def set_using_cap(self, value: float):
+        self.using_cap = max(0.0, min(1.0, value))
+        # Триггерим перераспределение
+        if self._capital_manager:
+            self._capital_manager.redistribute()

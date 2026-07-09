@@ -46,7 +46,16 @@ class OrderManager:
             estimated_price = order.price
         else:
             # Для рыночных можно получить цену из gateway, но пока заглушка
-            estimated_price = 100.0
+            estimated_price = await self.gateway.get_last_price(order.symbol)
+
+        if estimated_price is None:
+            # fallback: запросить историю (если метод не переопределён)
+            candles = await self.gateway.get_history(order.symbol, '1m', 1)
+            if candles:
+                estimated_price = candles[-1].close
+            else:
+                raise ValueError(f"Не удалось получить цену для {order.symbol}")
+            
         order.commission = self.commission_model.calculate(
             order.symbol, estimated_price, order.volume, order.side)
         order.slippage = 0.0

@@ -43,3 +43,7 @@ class BaseGateway(ABC):
     @abstractmethod
     async def get_history(self, symbol: str, timeframe: str, count: int) -> List[Candle]:
         ...
+    @abstractmethod
+    async def get_last_price(self, symbol: str) -> Optional[float]:
+        """Возвращает последнюю известную цену инструмента."""
+        pass
