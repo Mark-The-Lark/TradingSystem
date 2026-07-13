@@ -2,7 +2,7 @@ import asyncio
 import logging
 from concurrent.futures import Future
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QMainWindow, QMenu, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QApplication
 )
 from PyQt6.QtCore import QTimer, Qt, QMetaObject, Q_ARG
@@ -11,7 +11,7 @@ from core.events import EventBus
 from gui.add_strategy_dialog import AddStrategyDialog
 from gui.detail_panel import DetailPanel
 from gui.portfolio_backtest_dialog import PortfolioBacktestDialog
-
+from PyQt6.QtWidgets import QMenu
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
@@ -43,7 +43,6 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.capital_btn)
         control_layout.addStretch()
         layout.addLayout(control_layout)
-
         # Таблица стратегий
         self.table = QTableWidget()
         self.table.setColumnCount(8)
@@ -55,24 +54,17 @@ class MainWindow(QMainWindow):
         self.table.cellDoubleClicked.connect(self.open_detail_panel)
         layout.addWidget(self.table)
 
-        # Кнопки действий над выбранной стратегией
-        action_layout = QHBoxLayout()
-        self.stop_btn = QPushButton("Стоп")
-        self.start_btn = QPushButton("Старт")
-        self.remove_btn = QPushButton("Удалить")
-        action_layout.addWidget(self.stop_btn)
-        action_layout.addWidget(self.start_btn)
-        action_layout.addWidget(self.remove_btn)
-        action_layout.addStretch()
-        layout.addLayout(action_layout)
+        self.table.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+
+        self.table.customContextMenuRequested.connect(
+            self.show_context_menu
+        )
 
         # Соединения
         self.start_all_btn.clicked.connect(self.on_start_all)
         self.stop_all_btn.clicked.connect(self.on_stop_all)
-        self.add_btn.clicked.connect(self.on_add_strategy)
-        self.stop_btn.clicked.connect(self.on_stop_selected)
-        self.start_btn.clicked.connect(self.on_start_selected)
-        self.remove_btn.clicked.connect(self.on_remove_selected)
         self.backtest_btn.clicked.connect(self.open_backtest_dialog)
         self.capital_btn.clicked.connect(self.open_capital_panel)
 
@@ -155,6 +147,32 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.exception("Ошибка добавления стратегии")
                 QMessageBox.critical(self, "Ошибка", f"Не удалось добавить стратегию: {e}")
+                
+    #КОНТЕКСТ МЕНЮ ОТ ЯНЫЫ
+    def show_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+         # Если кликнули не по строке
+        if row < 0:
+             return
+        # Выделяем строку, по которой нажали
+        self.table.selectRow(row)
+
+        menu = QMenu(self)
+        start_action = menu.addAction("Запустить")
+        stop_action = menu.addAction("Остановить")
+        menu.addSeparator()
+        remove_action = menu.addAction("Удалить")
+
+        action = menu.exec(
+            self.table.viewport().mapToGlobal(pos)
+        )
+
+        if action == start_action:
+            self.on_start_selected()
+        elif action == stop_action:
+            self.on_stop_selected()
+        elif action == remove_action:
+            self.on_remove_selected()
 
     def on_stop_selected(self):
         name = self.selected_strategy_name()
