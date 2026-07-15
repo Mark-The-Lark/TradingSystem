@@ -91,6 +91,8 @@ class BacktestDialog(QDialog):
         )
         self.tabs.addTab(self.trades_table, "Сделки")
 
+        #######   эту часть писала яна обрати внимание!!!!!!!!!! ########
+
     def on_start(self):
         ticker = self.ticker_edit.text().strip()
         data_dir = self.data_dir_edit.text().strip()
