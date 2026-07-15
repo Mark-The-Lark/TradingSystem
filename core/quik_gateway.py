@@ -27,6 +27,7 @@ from quik_python.data_structures import (
     OrderBook,
     Operation,
     TransactionType,
+    StopOrder,
 )
 from quik_python.exceptions import TimeoutException
 
@@ -114,6 +115,10 @@ class QuikGateway(BaseGateway):
                 asyncio.create_task(self._handle_order_event(order))
             self._quik.events.add_on_order(on_order)
             self._order_handler = on_order
+
+            def _on_stop_order(self, stop_order: StopOrder):
+                asyncio.create_task(self._handle_stop_order_event(stop_order))
+            self._quik.events.add_on_stop_order(_on_stop_order)
 
             # 2. Сделки (исполнения)
             def on_trade(trade: Trade):
@@ -247,6 +252,32 @@ class QuikGateway(BaseGateway):
             # Полностью исполнена – событие будет также через _handle_trade_event
             # Но можно дополнительно обработать здесь
             logger.debug(f"Заявка {client_id} полностью исполнена (balance=0)")
+
+    async def _handle_stop_order_event(self, stop_order: StopOrder):
+        # Найти client_order_id по order_num (если есть)
+        # Для этого нужно хранить маппинг stop_order_num -> client_order_id
+        # Аналогично обычным ордерам, но отдельный словарь.
+        client_id = self._stop_order_num_to_client.get(stop_order.order_num)
+        if not client_id:
+            return
+        # Определить статус: по флагам или по полю status
+        if stop_order.flags & 0x02:  # отменена
+            await self.event_bus.publish(
+                f"strategy.{self._client_to_strategy.get(client_id, 'unknown')}.stop.cancel",
+                OrderCancelledEvent(order_id=client_id)
+            )
+        elif stop_order.balance == 0 and stop_order.quantity > 0:  # исполнена
+            # Для стоп-заявки исполнение обычно происходит полностью
+            await self.event_bus.publish(
+                f"strategy.{self._client_to_strategy.get(client_id, 'unknown')}.stop.fill",
+                OrderFilledEvent(
+                    order_id=client_id,
+                    fill_volume=stop_order.quantity - stop_order.balance,
+                    fill_price=stop_order.price,
+                    commission=0.0,  # комиссия может быть в stop_order.commission
+                    slippage=0.0,
+                )
+            )
 
     async def _handle_trade_event(self, trade: Trade):
         """Обработка сделки (исполнения)."""
@@ -480,6 +511,48 @@ class QuikGateway(BaseGateway):
             logger.error(f"Ошибка отправки заявки: {e}")
             raise
 
+    async def send_stop_order(self, order) -> str:
+        if not self._connected:
+            raise RuntimeError("Шлюз не подключён.")
+
+        class_code = self._get_class_code(order.symbol)
+        self._client_to_symbol[order.client_order_id] = (order.symbol, class_code)
+        self._client_to_strategy[order.client_order_id] = order.strategy_name
+
+        operation = Operation.BUY if order.side == OrderSide.BUY else Operation.SELL
+        stop_order_type = OrderType.STOP if order.order_type == OrderType.STOP else OrderType.TAKE_PROFIT
+        price = Decimal(str(order.price)) if order.price else Decimal('0')
+        condition_price = Decimal(str(order.stop_price)) if order.stop_price else Decimal('0')
+        qty = int(order.volume)
+        offset = Decimal(str(order.offset)) if order.offset else Decimal('0')
+        spread = Decimal(str(order.spread)) if order.spread else Decimal('0')
+        stop_order = StopOrder(
+            class_code=class_code,
+            sec_code=order.symbol,
+            account=self.account,
+            operation=operation,
+            price=price,
+            condition_price=condition_price,
+            qty=qty,
+            stop_order_type=stop_order_type,
+            offset=offset,
+            spread=spread,
+        )
+        try:
+            # Отправляем заявку через send_order с именованными параметрами
+            result = await self._quik.stop_orders.create_stop_order(stop_order)
+            # result — это объект Order
+            if not hasattr(result, 'order_num'):
+                raise RuntimeError(f"QUIK не вернул order_num. Ответ: {result}")
+            order_num = result.order_num
+            self._quik_order_to_client[order_num] = order.client_order_id
+            self._client_to_quik_order[order.client_order_id] = order_num
+            logger.info(f"Заявка отправлена: {order.client_order_id} -> order_num={order_num}")
+            return f"quik-{order_num}"
+        except Exception as e:
+            logger.error(f"Ошибка отправки заявки: {e}")
+            raise
+
     async def cancel_order(self, client_order_id: str) -> None:
         order_num = self._client_to_quik_order.get(client_order_id)
         if not order_num:
@@ -496,6 +569,9 @@ class QuikGateway(BaseGateway):
         logger.warning("QUIK не поддерживает изменение заявок. Отменяем и создайте новую.")
         await self.cancel_order(client_order_id)
 
+    async def kill_stop_order(self, client_order_id: str):
+        order_num = self._client_to_quik_order.get(client_order_id)
+        await self._quik.stop_orders.kill_stop_order(order_num)
     # ===================== Получение истории =====================
 
     async def get_history(self, symbol: str, timeframe: str, count: int) -> List[Candle]:

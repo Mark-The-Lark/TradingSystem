@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
-from core.events import EventBus, OrderFilledEvent, OrderCancelledEvent, OrderRejectedEvent, OrderRequestEvent
+from core.events import EventBus, OrderFilledEvent, OrderCancelledEvent, OrderRejectedEvent, OrderRequestEvent, StopOrderEvent, OrderConnectionEvent
 from core.models import Order, OrderSide, OrderType, Trade, Tick, Candle
 from core.order_manager import OrderManager
 
@@ -33,8 +33,6 @@ class Strategy(ABC):
         #            позволяя стратегии развёртывать больше / меньше выделенной квоты.
         #            Итоговое плечо ограничено CapitalManager.max_leverage.
         # weight   — коэффициент масштабирования объёма внутри get_position_size.
-        self.leverage: float = 1.0
-        self.weight: float = 1.0
         self._capital_manager = None
 
         # Позиция и цены входа — посимвольно
@@ -274,72 +272,6 @@ class Strategy(ABC):
             return self._capital_manager.get_available_capital(self.name)
         return 0.0
 
-    def get_position_size(self, symbol: str, price: float, risk_fraction: float = 1.0) -> float:
-        """Размер позиции как доля доступного капитала.
-        
-        volume = (available_capital * risk_fraction * weight) / price
-        """
-        available = self.get_available_capital() * self.using_cap
-        if available <= 0 or price <= 0:
-            return 0.0
-        max_volume = available / price
-        return max_volume * risk_fraction * self.weight
-
-    def get_position_size_by_risk(
-        self,
-        symbol: str,
-        entry_price: float,
-        stop_price: float,
-        risk_pct: float = 0.01,
-    ) -> float:
-        """Размер позиции по методу фиксированного % риска на сделку.
-
-        Формула: volume = (available * risk_pct) / |entry_price - stop_price|
-        
-        Args:
-            symbol:       торгуемый символ (для логирования)
-            entry_price:  предполагаемая цена входа
-            stop_price:   уровень стоп-лосса
-            risk_pct:     доля капитала, которой рискуем в сделке (по умолчанию 1%)
-        
-        Returns:
-            Объём в лотах (float). 0.0 если капитала нет или стоп совпадает с ценой входа.
-        """
-        if entry_price == stop_price:
-            logger.warning(f"{self.name}: entry_price == stop_price для {symbol}, размер позиции = 0")
-            return 0.0
-        available = self.get_available_capital() * self.using_cap
-        if available <= 0:
-            return 0.0
-        risk_amount = available * risk_pct * self.weight
-        price_risk = abs(entry_price - stop_price)
-        return risk_amount / price_risk
-
-    def compute_atr(self, symbol: str, timeframe: str, period: int = 14) -> Optional[float]:
-        """Вычисляет ATR (Average True Range) по последним barам истории.
-
-        ATR = среднее True Range за `period` баров.
-        True Range = max(H-L, |H-prev_C|, |L-prev_C|)
-
-        Returns:
-            ATR в единицах цены, или None если данных недостаточно.
-        """
-        import numpy as np
-        df = self.price_history.get(symbol, {}).get(timeframe)
-        if df is None or len(df) < period + 1:
-            return None
-        high  = df['high'].values.astype(float)
-        low   = df['low'].values.astype(float)
-        close = df['close'].values.astype(float)
-        tr = np.maximum(
-            high[1:] - low[1:],
-            np.maximum(
-                np.abs(high[1:] - close[:-1]),
-                np.abs(low[1:] - close[:-1]),
-            ),
-        )
-        return float(np.mean(tr[-period:]))
-
     def compute_atr_stop(
         self,
         symbol: str,
@@ -366,83 +298,79 @@ class Strategy(ABC):
             return entry_price + atr * atr_multiplier
 
     # --- Стоп-лосс / тейк-профит ---
-    def set_stop_loss(self, symbol: str, price: float) -> None:
-        """Устанавливает уровень стоп-лосса для символа.
-
-        При вызове check_sl_tp() на свече, где low/high достигает уровня,
-        автоматически отправляется закрывающий ордер по рынку.
-        """
-        self._stop_losses[symbol] = price
-
-    def set_take_profit(self, symbol: str, price: float) -> None:
-        """Устанавливает уровень тейк-профита для символа."""
-        self._take_profits[symbol] = price
-
-    def clear_sl_tp(self, symbol: str) -> None:
-        """Снимает SL и TP для символа (после закрытия позиции)."""
-        self._stop_losses.pop(symbol, None)
-        self._take_profits.pop(symbol, None)
-
-    async def check_sl_tp(self, candle: Candle) -> bool:
-        """Проверяет, достигла ли свеча уровней SL/TP, и закрывает позицию.
-
-        Вызывайте в начале on_candle() перед логикой сигналов:
-
-            async def on_candle(self, candle):
-                self.add_candle_to_history(candle)
-                if await self.check_sl_tp(candle):
-                    return   # позиция закрыта, дальнейшая логика не нужна
-                # ... остальная логика ...
-
-        Принцип проверки (позиционно-нейтральная):
-          - Лонг: SL срабатывает когда low ≤ sl_price; TP когда high ≥ tp_price.
-          - Шорт: SL срабатывает когда high ≥ sl_price; TP когда low ≤ tp_price.
-
-        При одновременном срабатывании SL имеет приоритет.
-
-        Returns:
-            True если ордер на закрытие был отправлен, иначе False.
-        """
-        symbol = candle.symbol
-        pos = self.positions.get(symbol, 0.0)
-        if pos == 0.0:
-            return False
-
-        sl = self._stop_losses.get(symbol)
-        tp = self._take_profits.get(symbol)
-        if sl is None and tp is None:
-            return False
-
-        hit_sl = hit_tp = False
-        if pos > 0:   # лонг
-            hit_sl = sl is not None and candle.low <= sl
-            hit_tp = tp is not None and candle.high >= tp
-        else:         # шорт
-            hit_sl = sl is not None and candle.high >= sl
-            hit_tp = tp is not None and candle.low <= tp
-
-        if not (hit_sl or hit_tp):
-            return False
-
-        exit_reason = 'stop_loss' if hit_sl else 'take_profit'
-        close_side = OrderSide.SELL if pos > 0 else OrderSide.BUY
-        close_volume = abs(pos)
-
+    async def set_stop_loss(self, symbol: str, price: float, volume: float, offset: float = None, slippage: float = None) -> str:
+        side = OrderSide.SELL
+        if volume < 0:
+            side = OrderSide.BUY
         order = Order(
-            client_order_id=f"sl_tp-{symbol}-{int(candle.timestamp.timestamp())}",
-            strategy_name=self.name,
-            symbol=symbol,
-            side=close_side,
-            order_type=OrderType.MARKET,
-            volume=close_volume,
-        )
-        await self.send_order(order)
-        self.clear_sl_tp(symbol)
-        logger.info(
-            f"{self.name}: {exit_reason.upper()} triggered for {symbol} "
-            f"pos={pos:.2f} @ candle {candle.timestamp}"
-        )
-        return True
+                    client_order_id=f"{self.name}_{symbol}_sl_{price}",
+                    strategy_name=self.name,
+                    symbol=symbol,
+                    side=side,
+                    order_type=OrderType.STOP,
+                    volume=abs(volume),
+                    stop_price=price,
+                    price= price - (offset or 0.0) if side == OrderSide.SELL else price + (offset or 0.0),
+                    slippage=slippage or 0.0
+                )
+        await self.event_bus.publish("order.stop", StopOrderEvent(order=order))
+
+        return order.client_order_id
+
+    async def set_take_profit(self, symbol: str, price: float, volume: float, offset: float = None, slippage: float = None) -> str:
+        side = OrderSide.SELL
+        if volume < 0:
+            side = OrderSide.BUY
+        order = Order(
+                    client_order_id=f"{self.name}_{symbol}_tp_{price}",
+                    strategy_name=self.name,
+                    symbol=symbol,
+                    side=side,
+                    order_type=OrderType.TAKE_PROFIT,
+                    volume=abs(volume),
+                    stop_price=price,
+                    price= price + (offset or 0.0) if side == OrderSide.SELL else price - (offset or 0.0),
+                    slippage=slippage or 0.0
+                )
+        await self.event_bus.publish("order.stop", StopOrderEvent(order=order))
+
+        return order.client_order_id
+    
+    async def set_limit(self, symbol: str, price: float, volume: float) -> str:
+        side = OrderSide.BUY
+        if volume < 0:
+            side = OrderSide.SELL
+        order = Order(
+                    client_order_id=f"{self.name}_{symbol}_lim_{price}",
+                    strategy_name=self.name,
+                    symbol=symbol,
+                    side=side,
+                    order_type=OrderType.LIMIT,
+                    volume=abs(volume),
+                    price= price,
+                )
+        await self.event_bus.publish("order.stop", StopOrderEvent(order=order))
+
+        return order.client_order_id
+    
+    async def set_market(self, symbol: str, volume: float) -> str:
+        side = OrderSide.BUY
+        if volume < 0:
+            side = OrderSide.SELL
+        order = Order(
+                    client_order_id=f"{self.name}_{symbol}_market",
+                    strategy_name=self.name,
+                    symbol=symbol,
+                    side=side,
+                    order_type=OrderType.MARKET,
+                    volume=abs(volume),
+                )
+        await self.event_bus.publish("order.stop", StopOrderEvent(order=order))
+
+        return order.client_order_id
+
+    async def connect_orders(self, *args) -> None:
+        await self.event_bus.publish("order.connect", OrderConnectionEvent(order_ids=args))
 
     # --- Сохранение / загрузка ---
     def save_state(self) -> dict:
@@ -450,8 +378,6 @@ class Strategy(ABC):
             'positions': self.positions,
             'entry_prices': self.entry_prices,
             'current_equity': self.current_equity,
-            'leverage': self.leverage,
-            'weight': self.weight,
             'price_history': {
                 sym: {tf: df.to_dict(orient='records') for tf, df in tf_dict.items()}
                 for sym, tf_dict in self.price_history.items()
@@ -463,8 +389,6 @@ class Strategy(ABC):
         self.positions = state.get('positions', {})
         self.entry_prices = state.get('entry_prices', {})
         self.current_equity = state.get('current_equity', 0.0)
-        self.leverage = state.get('leverage', 1.0)
-        self.weight = state.get('weight', 1.0)
         ph = state.get('price_history', {})
         for sym, tf_dict in ph.items():
             self.price_history.setdefault(sym, {})

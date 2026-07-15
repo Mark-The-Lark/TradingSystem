@@ -110,9 +110,7 @@ class StrategyManager:
         if strategy:
             await strategy.emergency_exit()
     async def cancel_all_orders_for_strategy(self, strategy_name: str):
-        orders = self.get_active_orders(strategy_name)
-        for order in orders:
-            await self.cancel_order(order.client_order_id)
+        await self.order_manager.cancel_all_orders(strategy_name)
 
     async def _save_component_states(self) -> None:
         """Сохраняет состояния OrderManager и CapitalManager."""

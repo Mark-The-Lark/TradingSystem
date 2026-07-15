@@ -184,6 +184,9 @@ class SimulationGateway(BaseGateway):
             await self.event_bus.publish("order.placed", OrderPlacedEvent(order=order))
             return gw_id
 
+    async def send_stop_order(self, order: Order) -> str:
+        return await self.send_order(order)
+
     async def cancel_order(self, client_order_id: str) -> None:
         self._market.remove_order(client_order_id)
         await self.event_bus.publish("order.cancelled", OrderCancelledEvent(order_id=client_order_id))

@@ -31,6 +31,12 @@ class BaseGateway(ABC):
     @abstractmethod
     async def send_order(self, order: Order) -> str:  # возвращает gateway_order_id
         ...
+    @abstractmethod
+    async def send_stop_order(self, order: Order) -> str:  # возвращает gateway_order_id
+        ...
+    @abstractmethod
+    async def kill_stop_order(self, client_order_id: str) -> str:  # возвращает gateway_order_id
+        ...
 
     @abstractmethod
     async def cancel_order(self, client_order_id: str) -> None:

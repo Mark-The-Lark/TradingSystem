@@ -70,3 +70,11 @@ class OrderRejectedEvent(Event):
 @dataclass(frozen=True)
 class OrderRequestEvent(Event):
     order: Order
+
+@dataclass(frozen=True)
+class StopOrderEvent(Event):
+    order: Order
+
+@dataclass(frozen=True)
+class OrderConnectionEvent(Event):
+    order_ids: Set[str]
