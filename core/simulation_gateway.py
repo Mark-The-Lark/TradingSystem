@@ -194,6 +194,9 @@ class SimulationGateway(BaseGateway):
     async def modify_order(self, client_order_id: str, **kwargs) -> None:
         await self.cancel_order(client_order_id)
 
+    async def kill_stop_order(self, client_order_id: str) -> None:
+        await self.cancel_order(client_order_id)
+
     async def get_history(self, symbol: str, timeframe: str, count: int) -> List[Candle]:
         """Генерирует 'count' фиктивных свечей в прошлое от текущего времени."""
         tf_map = {'1m': 1, '5m': 5, '1h': 60}
