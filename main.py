@@ -14,7 +14,8 @@ from core.strategy_manager import StrategyManager
 from core.state_store import JsonStateStore
 from core.capital_manager import CapitalManager
 from gui.main_window import MainWindow
-from strategies import STRATEGY_REGISTRY
+from core.strategy_registry import StrategyRegistry
+
 from config import QUIK_ENABLED
 
 if QUIK_ENABLED:
@@ -95,6 +96,8 @@ def main():
     commission = FixedCommission(1.0)
     order_manager = OrderManager(event_bus, gateway, risk_manager, commission)
     capital_manager = CapitalManager(total_capital=100000.0, max_leverage=1.0)
+    registry = StrategyRegistry("data//strategies")  # или "strategies"
+    registry.scan()
 
     # Хранилище состояний
     data_path = Path(__file__).parent / 'data'
@@ -107,7 +110,8 @@ def main():
     async def load_initial():
         saved = await state_store.load_strategies_list()
         for meta in saved:
-            cls = STRATEGY_REGISTRY.get(meta['class_name'])
+            print(meta)
+            cls = registry.get(meta['class_name'])
             if cls:
                 strategy = cls(
                     name=meta['name'],
@@ -138,7 +142,7 @@ def main():
     async_loop.run_coroutine(boot()).result()
 
     # Создаём главное окно
-    window = MainWindow(event_bus, strategy_manager, STRATEGY_REGISTRY, async_loop)
+    window = MainWindow(event_bus, strategy_manager, registry, async_loop)
     window.show()
 
     # Запускаем Qt event loop

@@ -14,8 +14,8 @@ import pyqtgraph as pg
 from core.historical_data import HistoricalDataLoader
 from core.portfolio_backtest_engine import PortfolioBacktestEngine
 from core.commission import FixedCommission
-from strategies import STRATEGY_REGISTRY
 from core.mocks import MockEventBus, MockOrderManager
+from core.strategy_registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +23,15 @@ class PortfolioBacktestDialog(QDialog):
     results_ready = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
     # progress_updated = pyqtSignal(int)
-    def __init__(self, event_bus, async_loop, parent=None):
+    def __init__(self, event_bus, async_loop, parent=None, registry = None):
         super().__init__(parent)
 
-
+        if registry is None:
+            reg = StrategyRegistry('data\\strategies')
+            reg.scan()
+            self.registry = reg.get_all()
+        else:
+            self.registry = registry.get_all()
 
         self.results_ready.connect(self._show_results)
         self.error_occurred.connect(self._show_error)
@@ -133,7 +138,7 @@ class PortfolioBacktestDialog(QDialog):
 
         # Выбор класса
         class_combo = QComboBox()
-        class_combo.addItems(STRATEGY_REGISTRY.keys())
+        class_combo.addItems(self.registry.keys())
         self.strategy_table.setCellWidget(row, 0, class_combo)
 
         # Имя (автоматическое)
@@ -141,7 +146,7 @@ class PortfolioBacktestDialog(QDialog):
         self.strategy_table.setCellWidget(row, 1, name_edit)
 
         # Тикеры – из subscriptions временного экземпляра
-        cls = STRATEGY_REGISTRY[class_combo.currentText()]
+        cls = self.registry[class_combo.currentText()]
         # try:
         #     temp = cls(name="tmp", event_bus=MockEventBus(), order_manager=MockOrderManager())
         #     tickers = ", ".join(sorted({s for s, _ in temp.subscriptions}))
@@ -210,7 +215,7 @@ class PortfolioBacktestDialog(QDialog):
             if not name:
                 QMessageBox.warning(self, "Ошибка", "Имя стратегии не может быть пустым")
                 return
-            cls = STRATEGY_REGISTRY.get(class_name)
+            cls = self.registry.get(class_name)
             if not cls:
                 continue
 

@@ -12,10 +12,11 @@ from gui.add_strategy_dialog import AddStrategyDialog
 from gui.detail_panel import DetailPanel
 from gui.portfolio_backtest_dialog import PortfolioBacktestDialog
 from PyQt6.QtWidgets import QMenu
+from core.strategy_registry import StrategyRegistry
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
-    def __init__(self, event_bus: EventBus, strategy_manager: StrategyManager, registry: dict, async_loop):
+    def __init__(self, event_bus: EventBus, strategy_manager: StrategyManager, registry: StrategyRegistry, async_loop):
         super().__init__()
         self.event_bus = event_bus
         self.strategy_manager = strategy_manager
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.stop_all_btn.clicked.connect(self.on_stop_all)
         self.backtest_btn.clicked.connect(self.open_backtest_dialog)
         self.capital_btn.clicked.connect(self.open_capital_panel)
+        self.add_btn.clicked.connect(self.on_add_strategy)
 
         # Таймер обновления таблицы
         self.timer = QTimer()
@@ -126,16 +128,16 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             try:
                 name = dialog.name_edit.text().strip()
-                class_name = dialog.class_combo.currentText()
-                cls = self.registry.get(class_name)
                 if not name:
-                    QMessageBox.warning(self,'Ошибка', 'Имя не может быть пустым')
+                    QMessageBox.warning(self, 'Ошибка', 'Имя не может быть пустым')
                     return
 
-                if not cls:
-                    QMessageBox.warning(self, "Ошибка", f"Класс {class_name} не найден")
+                strategy_class = dialog.get_selected_class()
+                if not strategy_class:
+                    QMessageBox.warning(self, "Ошибка", "Выберите класс стратегии")
                     return
-                strategy = cls(
+
+                strategy = strategy_class(
                     name=name,
                     event_bus=self.event_bus,
                     order_manager=self.strategy_manager.order_manager,
@@ -150,28 +152,30 @@ class MainWindow(QMainWindow):
                 
     #КОНТЕКСТ МЕНЮ ОТ ЯНЫЫ
     def show_context_menu(self, pos):
-        row = self.table.rowAt(pos.y())
-         # Если кликнули не по строке
-        if row < 0:
-             return
-        # Выделяем строку, по которой нажали
-        self.table.selectRow(row)
-
         menu = QMenu(self)
-        start_action = menu.addAction("Запустить")
-        stop_action = menu.addAction("Остановить")
+
+        add_action = menu.addAction("➕ Добавить стратегию...")
         menu.addSeparator()
-        remove_action = menu.addAction("Удалить")
 
-        action = menu.exec(
-            self.table.viewport().mapToGlobal(pos)
-        )
+        row = self.table.rowAt(pos.y())
+        if row >= 0:
+            self.table.selectRow(row)
+            start_action = menu.addAction("▶ Запустить")
+            stop_action = menu.addAction("⏹ Остановить")
+            menu.addSeparator()
+            remove_action = menu.addAction("🗑 Удалить")
+        else:
+            start_action = stop_action = remove_action = None
 
-        if action == start_action:
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+
+        if action == add_action:
+            self.on_add_strategy()
+        elif action is not None and action == start_action:
             self.on_start_selected()
-        elif action == stop_action:
+        elif action is not None and action == stop_action:
             self.on_stop_selected()
-        elif action == remove_action:
+        elif action is not None and action == remove_action:
             self.on_remove_selected()
 
     def on_stop_selected(self):
@@ -220,15 +224,16 @@ class MainWindow(QMainWindow):
         # Собираем запущенные стратегии с ненулевыми позициями
         active_positions = []
         for name, s in self.strategy_manager._strategies.items():
-            if s._status == 'RUNNING':
-                pos_parts = [f"{sym}:{pos:.2f}" for sym, pos in s.positions.items() if pos != 0]
-                if pos_parts:
-                    active_positions.append(f"{name}: {', '.join(pos_parts)}")
+            pos_parts = [f"{sym}:{pos:.2f}" for sym, pos in s.positions.items() if pos != 0]
+            if pos_parts:
+                active_positions.append(f"{name}: {', '.join(pos_parts)}")
 
         msg = ""
         if active_positions:
             msg = "У следующих стратегий открыты позиции:\n" + "\n".join(active_positions) + "\n\n"
-        msg += "Остановить стратегии и выйти?"
+            msg += "Остановить стратегии и выйти?"
+        else:
+            msg = "Вы уверены что хотите выйти?"
 
         reply = QMessageBox.question(
             self, "Подтверждение выхода", msg,
